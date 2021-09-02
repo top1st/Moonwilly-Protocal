@@ -10,6 +10,8 @@ contract MoonWillyV2 is ERC20, Ownable {
 
     bool private swapping;
 
+    bool public disableFees;
+
     TokenDividendTracker public dividendTracker;
 
     mapping(address => bool) private _isExcludedFromFee;
@@ -17,6 +19,9 @@ contract MoonWillyV2 is ERC20, Ownable {
     // store addresses that a automatic market maker pairs. Any transfer *to* these addresses
     // could be subject to a maximum transfer amount
     mapping(address => bool) public automatedMarketMakerPairs;
+
+    mapping(address => bool) public whiteList;
+    mapping(address => bool) public blackList;
 
     IUniswapV2Router02 public uniswapV2Router;
     address public immutable uniswapV2Pair;
@@ -37,17 +42,17 @@ contract MoonWillyV2 is ERC20, Ownable {
 
     uint256 public maxSellTransactionAmount = 2500 * 1e3 * 1e18; // 0.1% of total supply 10M
 
-    uint256 private feeUnits = 100;
-    uint256 public standardFee = 15;
-    uint256 public DAIRewardFee = 8;
-    uint256 public liquidityFee = 3;
-    uint256 public marketingFee = 3;
-    uint256 public burnFee = 1;
+    uint256 private feeUnits = 1000;
+    uint256 public standardFee = 150;
+    uint256 public DAIRewardFee = 80;
+    uint256 public liquidityFee = 30;
+    uint256 public marketingFee = 30;
+    uint256 public burnFee = 10;
 
-    uint256 public antiDumpFee = 3;
-    uint256 public antiDumpMarket = 1;
-    uint256 public antiDumpLiquidity = 1;
-    uint256 public antiDumpBurn = 1;
+    uint256 public antiDumpFee = 30;
+    uint256 public antiDumpMarket = 10;
+    uint256 public antiDumpLiquidity = 10;
+    uint256 public antiDumpBurn = 10;
 
     uint256 private liquidityBalance;
     uint256 private treasuryBalance;
@@ -56,12 +61,13 @@ contract MoonWillyV2 is ERC20, Ownable {
     uint256 public gasForProcessing = 300000;
 
     uint256 public tradingEnabledTimestamp;
+    bool public tradingEnabled = true;
 
     event SetAutomatedMarketMakerPair(address indexed pair, bool indexed value);
     event SwapAndLiquify(uint256 tokensSwapped, uint256 ethReceived, uint256 tokensIntoLiqudity);
     event ProcessedDividendTracker(uint256 iterations, uint256 claims, uint256 lastProcessedIndex, bool indexed automatic, uint256 gas, address indexed processor);
 
-    constructor() ERC20("MoonWilly", "MNWL") {
+    constructor() ERC20("MoonWilly", "MoonWilly") {
 
         dividendTracker = new TokenDividendTracker("MoonWilly_Dividend_Tracker", "MoonWilly_Dividend_Tracker", DAIToken);
 
@@ -96,20 +102,126 @@ contract MoonWillyV2 is ERC20, Ownable {
 
 
         _mint(owner(), 1000000000 * 1e18);
-        tradingEnabledTimestamp = block.timestamp;
+        tradingEnabledTimestamp = block.timestamp.add(2 days);
     }
 
     receive() external payable {
     }
 
-    function updateLiquidityWallet(address newLiquidityWallet) public onlyOwner {
+    function setTradingEnabled(bool _enabled) external onlyOwner {
+        tradingEnabled = _enabled;
+    }
+
+    function updateStandardFees(uint256 _daiRewardFee, uint256 _liquidityFee, uint256 _marketingFee, uint256 _burnFee) external onlyOwner {
+        DAIRewardFee = _daiRewardFee;
+        liquidityFee = _liquidityFee;
+        marketingFee = _marketingFee;
+        burnFee = _burnFee;
+        standardFee = _daiRewardFee + _liquidityFee + _marketingFee + _burnFee;
+        require(standardFee <= 150, "Should be less than 15%");
+    }
+
+    function updateUntiDumpFees(uint256 _antiDumpMarket, uint256 _antiDumpLiquidity, uint256 _antiDumpBurn) external onlyOwner {
+        antiDumpMarket = _antiDumpMarket;
+        antiDumpLiquidity = _antiDumpLiquidity;
+        antiDumpBurn = _antiDumpBurn;
+        antiDumpFee = _antiDumpMarket + _antiDumpLiquidity + antiDumpBurn;
+        require(antiDumpFee <= 50, "Should be less than 5%");
+    }
+
+    function updateLiquidityWallet(address newLiquidityWallet) external onlyOwner {
         require(newLiquidityWallet != liquidityWallet, "MoonWilly: The liquidity wallet is already this address");
         _isExcludedFromFee[newLiquidityWallet] = true;
         liquidityWallet = newLiquidityWallet;
     }
 
+    function excludeFromDaiReward(address _address) external onlyOwner {
+        dividendTracker.excludeFromDividends(_address);
+    }
+
+    function excludeFromFee(address _address) external onlyOwner {
+        _isExcludedFromFee[_address] = true;
+    }
+
+    function includeToFee(address _address) external onlyOwner {
+        _isExcludedFromFee[_address] = false;
+    }
+
     function setTradingEnabledTimestamp(uint256 timestamp) external onlyOwner {
         tradingEnabledTimestamp = timestamp;
+    }
+
+    function updateDisableFees(bool _disableFees) external onlyOwner {
+        if(_disableFees) {
+            _removeDust();
+        }
+        disableFees = _disableFees;
+    }
+
+    function addToWhiteList(address _address) external onlyOwner {
+        whiteList[_address] = true;
+    }
+
+    function execludeFromWhiteList(address _address) external onlyOwner {
+        whiteList[_address] = false;
+    }
+
+    function addAddressToBlackList(address _address) external onlyOwner {
+        blackList[_address] = true;
+    }
+
+    function setMultiToBlackList(address[] memory _addresses, bool _black) external onlyOwner {
+        for(uint i = 0; i < _addresses.length; i++) {
+            blackList[_addresses[i]] = _black;
+        }
+    }
+
+    function execludeAddressFromBlackList(address _address) external onlyOwner {
+        blackList[_address] = false;
+    }
+
+    function updateSwapTokensAtAmount(uint256 _amount) external onlyOwner {
+        swapTokensAtAmount = _amount;
+    }
+
+    function destroyTracker() external onlyOwner {
+        disableFees = true;
+        dividendTracker.destroyDividendTracker();
+        _removeDust();
+    }
+
+    function removeBadToken(IERC20 Token) external onlyOwner {
+        require(address(Token) != address(this), "You cannot remove this Token");
+        Token.transfer(owner(), Token.balanceOf(address(this)));
+    }
+
+    function _removeDust() private {
+        IERC20(DAIToken).transfer(owner(), IERC20(DAIToken).balanceOf(address (this)));
+        IERC20(address (this)).transfer(owner(), IERC20(address (this)).balanceOf(address (this)));
+        payable(owner()).send(address(this).balance);
+    }
+
+    function setDividendTracker(TokenDividendTracker _dividendTracker) external onlyOwner {
+        dividendTracker = _dividendTracker;
+        // exclude from receiving dividends
+        dividendTracker.excludeFromDividends(address(this));
+        dividendTracker.excludeFromDividends(address(dividendTracker));
+        dividendTracker.excludeFromDividends(liquidityWallet);
+        dividendTracker.excludeFromDividends(treasury);
+        dividendTracker.excludeFromDividends(teamwallet);
+        dividendTracker.excludeFromDividends(airdrop);
+        dividendTracker.excludeFromDividends(burnWallet);
+        dividendTracker.excludeFromDividends(address(uniswapV2Router));
+        _setAutomatedMarketMakerPair(uniswapV2Pair, true);
+    }
+
+    function updateGasForProcessing(uint256 _gasForProcessing) external onlyOwner {
+        gasForProcessing = _gasForProcessing;
+    }
+
+    function updateMaxSellAmount(uint256 _max) external onlyOwner {
+        require(_max > 1000 * 1e18 && _max < 2500 * 1e3 * 1e18);
+        maxSellTransactionAmount = _max;
     }
 
     function burn(uint256 amount) external {
@@ -125,15 +237,15 @@ contract MoonWillyV2 is ERC20, Ownable {
             return;
         }
 
-        bool noFee = _isExcludedFromFee[from] || _isExcludedFromFee[to];
+        bool noFee = _isExcludedFromFee[from] || _isExcludedFromFee[to] || disableFees;
 
-        if (!swapping && !noFee && from != address(uniswapV2Router)) {
-            if (tradingEnabledTimestamp.add(5 minutes) > block.timestamp) {
-                require(amount <= maxSellTransactionAmount, "anti whale feature for first 2 minutes");
-            }
-        }
+        require(!(blackList[from] || blackList[to]), "Hacker Address Blacked");
 
-        if (!swapping && !noFee) {
+        if(!noFee && (automatedMarketMakerPairs[from] || automatedMarketMakerPairs[to]) && !swapping) {
+
+            require(tradingEnabled, "Trading Disabled");
+            require(block.timestamp >= tradingEnabledTimestamp || whiteList[from] || whiteList[to], "Trading Still Not Enabled");
+
             uint256 contractBalance = balanceOf(address(this));
             if (contractBalance >= swapTokensAtAmount) {
                 if (!swapping && !automatedMarketMakerPairs[from]) {
@@ -144,17 +256,14 @@ contract MoonWillyV2 is ERC20, Ownable {
                     swapping = false;
                 }
             }
-        }
 
-        if (noFee || swapping) {
-            super._transfer(from, to, amount);
-        } else {
             uint256 fees = amount.mul(standardFee).div(feeUnits);
-//            uint256 rewardAmount = amount.mul(DAIRewardFee).div(feeUnits);
+            //            uint256 rewardAmount = amount.mul(DAIRewardFee).div(feeUnits);
             uint256 marketingAmount = amount.mul(marketingFee).div(feeUnits);
             uint256 liquidityAmount = amount.mul(liquidityFee).div(feeUnits);
             uint256 burnAmount = amount.mul(burnFee).div(feeUnits);
             if (automatedMarketMakerPairs[to]) {
+                require(amount <= maxSellTransactionAmount, "Max Sell Amount Error");
                 fees.add(amount.mul(antiDumpFee).div(feeUnits));
                 marketingAmount.add(amount.mul(antiDumpMarket).div(feeUnits));
                 burnAmount.add(amount.mul(antiDumpBurn).div(feeUnits));
@@ -165,19 +274,23 @@ contract MoonWillyV2 is ERC20, Ownable {
             treasuryBalance = treasuryBalance.add(marketingAmount);
             liquidityBalance = liquidityBalance.add(liquidityAmount);
             super._transfer(from, to, amount.sub(fees));
+
+        } else {
+            super._transfer(from, to, amount);
         }
 
+        if(!disableFees) {
+            dividendTracker.setBalance(from, balanceOf(from));
+            dividendTracker.setBalance(to, balanceOf(to));
 
-        dividendTracker.setBalance(payable(from), balanceOf(from));
-        dividendTracker.setBalance(payable(to), balanceOf(to));
+            if (!swapping && !noFee) {
+                uint256 gas = gasForProcessing;
+                try dividendTracker.process(gas) returns (uint256 iterations, uint256 claims, uint256 lastProcessedIndex) {
+                    emit ProcessedDividendTracker(iterations, claims, lastProcessedIndex, true, gas, tx.origin);
+                }
+                catch {
 
-        if (!swapping && !noFee) {
-            uint256 gas = gasForProcessing;
-            try dividendTracker.process(gas) returns (uint256 iterations, uint256 claims, uint256 lastProcessedIndex) {
-                emit ProcessedDividendTracker(iterations, claims, lastProcessedIndex, true, gas, tx.origin);
-            }
-            catch {
-
+                }
             }
         }
     }
@@ -247,7 +360,7 @@ contract MoonWillyV2 is ERC20, Ownable {
 
     function swapAndSendDividends() private {
         swapTokensForDai(balanceOf(address(this)), address(this));
-        if(address(this).balance > 3e18) { // > 3BNB
+        if(address(this).balance > 1e18) { // > 3BNB
             swapBNBForDai();
         }
         uint256 dividends = IERC20(DAIToken).balanceOf(address(this));
@@ -295,14 +408,15 @@ contract MoonWillyV2 is ERC20, Ownable {
     }
 
     function _setAutomatedMarketMakerPair(address pair, bool value) private {
-        require(automatedMarketMakerPairs[pair] != value, "AkuAku: Automated market maker pair is already set to that value");
+        require(automatedMarketMakerPairs[pair] != value, "MoonWilly: Automated market maker pair is already set to that value");
         automatedMarketMakerPairs[pair] = value;
 
         if (value) {
-            dividendTracker.excludeFromDividends(pair);
+            try dividendTracker.excludeFromDividends(pair) {
+            } catch {
+                // already excluded
+            }
         }
-
         emit SetAutomatedMarketMakerPair(pair, value);
     }
-
 }

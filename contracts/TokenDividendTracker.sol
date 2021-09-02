@@ -14,12 +14,6 @@ interface IDividendPayingToken {
     /// @return The amount of dividend in wei that `_owner` can withdraw.
     function dividendOf(address _owner) external view returns (uint256);
 
-    /// @notice Distributes ether to token holders as dividends.
-    /// @dev SHOULD distribute the paid ether to token holders as dividends.
-    ///  SHOULD NOT directly transfer ether to token holders in this function.
-    ///  MUST emit a `DividendsDistributed` event when the amount of distributed ether is greater than 0.
-    function distributeDividends() external payable;
-
     /// @notice Withdraws the ether distributed to the sender.
     /// @dev SHOULD transfer `dividendOf(msg.sender)` wei to `msg.sender`, and `dividendOf(msg.sender)` SHOULD be 0 after the transfer.
     ///  MUST emit a `DividendWithdrawn` event if the amount of ether transferred is greater than 0.
@@ -76,7 +70,7 @@ contract DividendPayingToken is ERC20, IDividendPayingToken, IDividendPayingToke
     uint256 internal magnifiedDividendPerShare;
     uint256 internal lastAmount;
 
-    address public immutable RewordToken;
+    address public immutable rewardToken;
 
     // About dividendCorrection:
     // If the token balance of a `_user` is never changed, the dividend of `_user` can be computed with:
@@ -94,52 +88,12 @@ contract DividendPayingToken is ERC20, IDividendPayingToken, IDividendPayingToke
 
     uint256 public totalDividendsDistributed;
 
-    constructor(string memory _name, string memory _symbol, address _rewardToken) public ERC20(_name, _symbol) {
-        RewordToken = _rewardToken;
+    constructor(string memory _name, string memory _symbol, address _rewardToken) ERC20(_name, _symbol) {
+        rewardToken = _rewardToken;
     }
 
 
     receive() external payable {
-    }
-
-    /// @notice Distributes ether to token holders as dividends.
-    /// @dev It reverts if the total supply of tokens is 0.
-    /// It emits the `DividendsDistributed` event if the amount of received ether is greater than 0.
-    /// About undistributed ether:
-    ///   In each distribution, there is a small amount of ether not distributed,
-    ///     the magnified amount of which is
-    ///     `(msg.value * magnitude) % totalSupply()`.
-    ///   With a well-chosen `magnitude`, the amount of undistributed ether
-    ///     (de-magnified) in a distribution can be less than 1 wei.
-    ///   We can actually keep track of the undistributed ether in a distribution
-    ///     and try to distribute it in the next distribution,
-    ///     but keeping track of such data on-chain costs much more than
-    ///     the saved ether, so we don't do that.
-    function distributeDividends() public override payable {
-        require(totalSupply() > 0);
-
-        if (msg.value > 0) {
-            magnifiedDividendPerShare = magnifiedDividendPerShare.add(
-                (msg.value).mul(magnitude) / totalSupply()
-            );
-            emit DividendsDistributed(msg.sender, msg.value);
-
-            totalDividendsDistributed = totalDividendsDistributed.add(msg.value);
-        }
-    }
-
-
-    function distributeDaiDividends(uint256 amount) public {
-        require(totalSupply() > 0);
-
-        if (amount > 0) {
-            magnifiedDividendPerShare = magnifiedDividendPerShare.add(
-                (amount).mul(magnitude) / totalSupply()
-            );
-            emit DividendsDistributed(msg.sender, amount);
-
-            totalDividendsDistributed = totalDividendsDistributed.add(amount);
-        }
     }
 
     /// @notice Withdraws the ether distributed to the sender.
@@ -150,12 +104,12 @@ contract DividendPayingToken is ERC20, IDividendPayingToken, IDividendPayingToke
 
     /// @notice Withdraws the ether distributed to the sender.
     /// @dev It emits a `DividendWithdrawn` event if the amount of withdrawn ether is greater than 0.
-    function _withdrawDividendOfUser(address payable user) internal returns (uint256) {
+    function _withdrawDividendOfUser(address user) internal returns (uint256) {
         uint256 _withdrawableDividend = withdrawableDividendOf(user);
         if (_withdrawableDividend > 0) {
             withdrawnDividends[user] = withdrawnDividends[user].add(_withdrawableDividend);
             emit DividendWithdrawn(user, _withdrawableDividend);
-            bool success = IERC20(RewordToken).transfer(user, _withdrawableDividend);
+            bool success = IERC20(rewardToken).transfer(user, _withdrawableDividend);
 
             if (!success) {
                 withdrawnDividends[user] = withdrawnDividends[user].sub(_withdrawableDividend);
@@ -209,9 +163,9 @@ contract DividendPayingToken is ERC20, IDividendPayingToken, IDividendPayingToke
     function _transfer(address from, address to, uint256 value) internal virtual override {
         require(false);
 
-        int256 _magCorrection = magnifiedDividendPerShare.mul(value).toInt256Safe();
-        magnifiedDividendCorrections[from] = magnifiedDividendCorrections[from].add(_magCorrection);
-        magnifiedDividendCorrections[to] = magnifiedDividendCorrections[to].sub(_magCorrection);
+//        int256 _magCorrection = magnifiedDividendPerShare.mul(value).toInt256Safe();
+//        magnifiedDividendCorrections[from] = magnifiedDividendCorrections[from].add(_magCorrection);
+//        magnifiedDividendCorrections[to] = magnifiedDividendCorrections[to].sub(_magCorrection);
     }
 
     /// @dev Internal function that mints tokens to an account.
@@ -265,12 +219,14 @@ contract TokenDividendTracker is DividendPayingToken, Ownable {
     uint256 public claimWait;
     uint256 public immutable minimumTokenBalanceForDividends;
 
+    bool public destroyed = false;
+
     event ExcludeFromDividends(address indexed account);
     event ClaimWaitUpdated(uint256 indexed newValue, uint256 indexed oldValue);
 
     event Claim(address indexed account, uint256 amount, bool indexed automatic);
 
-    constructor(string memory _name, string memory _symbol, address rewardToken) public DividendPayingToken(_name, _symbol, rewardToken) {
+    constructor(string memory _name, string memory _symbol, address rewardToken) DividendPayingToken(_name, _symbol, rewardToken) {
         claimWait = 3600;
         minimumTokenBalanceForDividends = 10000 * (10 ** 18);
         //must hold 10000+ tokens
@@ -282,6 +238,29 @@ contract TokenDividendTracker is DividendPayingToken, Ownable {
 
     function withdrawDividend() public pure override {
         require(false, "MoonWilly_Dividend_Tracker: withdrawDividend disabled. Use the 'claim' function on the main MoonWilly contract.");
+    }
+
+    function distributeDaiDividends(uint256 amount) external onlyOwner {
+        require(totalSupply() > 0);
+
+        if (amount > 0) {
+            magnifiedDividendPerShare = magnifiedDividendPerShare.add(
+                (amount).mul(magnitude) / totalSupply()
+            );
+            emit DividendsDistributed(msg.sender, amount);
+
+            totalDividendsDistributed = totalDividendsDistributed.add(amount);
+        }
+    }
+
+    function destroyDividendTracker() external onlyOwner {
+        IERC20(rewardToken).transfer(owner(), IERC20(rewardToken).balanceOf(address(this)));
+        destroyed = true;
+    }
+
+    modifier isDestroyed() {
+        require(!destroyed, "Tracker Destroyed");
+        _;
     }
 
     function excludeFromDividends(address account) external onlyOwner {
@@ -382,7 +361,10 @@ contract TokenDividendTracker is DividendPayingToken, Ownable {
         return block.timestamp.sub(lastClaimTime) >= claimWait;
     }
 
-    function setBalance(address payable account, uint256 newBalance) external onlyOwner {
+    function setBalance(address account, uint256 newBalance) external onlyOwner {
+        if(destroyed) {
+            return;
+        }
         if (excludedFromDividends[account]) {
             return;
         }
@@ -396,10 +378,10 @@ contract TokenDividendTracker is DividendPayingToken, Ownable {
             tokenHoldersMap.remove(account);
         }
 
-        processAccount(account, true);
+//        processAccount(account, true);
     }
 
-    function process(uint256 gas) public returns (uint256, uint256, uint256) {
+    function process(uint256 gas) public isDestroyed returns (uint256, uint256, uint256) {
         uint256 numberOfTokenHolders = tokenHoldersMap.keys.length;
 
         if (numberOfTokenHolders == 0) {
@@ -425,7 +407,7 @@ contract TokenDividendTracker is DividendPayingToken, Ownable {
             address account = tokenHoldersMap.keys[_lastProcessedIndex];
 
             if (canAutoClaim(lastClaimTimes[account])) {
-                if (processAccount(payable(account), true)) {
+                if (processAccount(account, true)) {
                     claims++;
                 }
             }
@@ -446,7 +428,7 @@ contract TokenDividendTracker is DividendPayingToken, Ownable {
         return (iterations, claims, lastProcessedIndex);
     }
 
-    function processAccount(address payable account, bool automatic) public onlyOwner returns (bool) {
+    function processAccount(address account, bool automatic) public onlyOwner returns (bool) {
         uint256 amount = _withdrawDividendOfUser(account);
 
         if (amount > 0) {
