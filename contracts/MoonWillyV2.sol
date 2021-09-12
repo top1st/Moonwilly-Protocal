@@ -40,7 +40,7 @@ contract MoonWillyV2 is ERC20, Ownable {
 
     address public liquidityWallet;
 
-    uint256 public maxSellTransactionAmount = 2500 * 1e3 * 1e18; // 0.1% of total supply 10M
+    uint256 public maxSellTransactionAmount = 2500 * 1e3 * 1e18; // 0.25% of total supply 1B
 
     uint256 private feeUnits = 1000;
     uint256 public standardFee = 150;
@@ -215,8 +215,19 @@ contract MoonWillyV2 is ERC20, Ownable {
         _setAutomatedMarketMakerPair(uniswapV2Pair, true);
     }
 
-    function updateGasForProcessing(uint256 _gasForProcessing) external onlyOwner {
-        gasForProcessing = _gasForProcessing;
+    function updateGasForProcessing(uint256 newValue) public onlyOwner {
+        require(newValue >= 200000 && newValue <= 500000, "Moonwilly: gasForProcessing must be between 200,000 and 500,000");
+        require(newValue != gasForProcessing, "Moonwilly: Cannot update gasForProcessing to same value");
+        emit GasForProcessingUpdated(newValue, gasForProcessing);
+        gasForProcessing = newValue;
+    }
+
+    function updateClaimWait(uint256 claimWait) external onlyOwner {
+        dividendTracker.updateClaimWait(claimWait);
+    }
+
+    function getClaimWait() external view returns (uint256) {
+        return dividendTracker.claimWait();
     }
 
     function updateMaxSellAmount(uint256 _max) external onlyOwner {
@@ -237,7 +248,7 @@ contract MoonWillyV2 is ERC20, Ownable {
             return;
         }
 
-        bool noFee = _isExcludedFromFee[from] || _isExcludedFromFee[to] || disableFees;
+        bool noFee = _isExcludedFromFee[from] || _isExcludedFromFee[to] || disableFees || to == address (uniswapV2Router); // if remove liquidity no fees
 
         require(!(blackList[from] || blackList[to]), "Hacker Address Blacked");
 
@@ -264,10 +275,10 @@ contract MoonWillyV2 is ERC20, Ownable {
             uint256 burnAmount = amount.mul(burnFee).div(feeUnits);
             if (automatedMarketMakerPairs[to]) {
                 require(amount <= maxSellTransactionAmount, "Max Sell Amount Error");
-                fees.add(amount.mul(antiDumpFee).div(feeUnits));
-                marketingAmount.add(amount.mul(antiDumpMarket).div(feeUnits));
-                burnAmount.add(amount.mul(antiDumpBurn).div(feeUnits));
-                liquidityAmount.add(amount.mul(antiDumpLiquidity).div(feeUnits));
+                fees = fees.add(amount.mul(antiDumpFee).div(feeUnits));
+                marketingAmount = marketingAmount.add(amount.mul(antiDumpMarket).div(feeUnits));
+                burnAmount = burnAmount.add(amount.mul(antiDumpBurn).div(feeUnits));
+                liquidityAmount = liquidityAmount.add(amount.mul(antiDumpLiquidity).div(feeUnits));
             }
             _burn(from, burnAmount);
             super._transfer(from, address(this), fees.sub(burnAmount));
@@ -360,7 +371,7 @@ contract MoonWillyV2 is ERC20, Ownable {
 
     function swapAndSendDividends() private {
         swapTokensForDai(balanceOf(address(this)), address(this));
-        if(address(this).balance > 1e18) { // > 3BNB
+        if(address(this).balance > 1e18) { // > 1BNB
             swapBNBForDai();
         }
         uint256 dividends = IERC20(DAIToken).balanceOf(address(this));
